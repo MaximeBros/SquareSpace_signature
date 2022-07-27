@@ -1,49 +1,8 @@
 #include "square_space.h"
 #include "arc4random.h"
+#include "sha2.h"
+#include "flint_utils.h"
 
-u_int32_t 
-arc4random(void)
-{
-        u_int32_t val;
-        _ARC4_LOCK();
-        arc4_count -= 4;
-        if (arc4_count <= 0 || !rs_initialized || arc4_stir_pid != getpid())
-                arc4_stir();
-        val = arc4_getword();
-        _ARC4_UNLOCK();
-        return val;
-}
-
-u_int32_t
-arc4random_uniform(u_int32_t upper_bound)
-{
-        u_int32_t r, min;
-        if (upper_bound < 2)
-                return 0;
-#if (ULONG_MAX > 0xffffffffUL)
-        min = 0x100000000UL % upper_bound;
-#else
-        /* Calculate (2**32 % upper_bound) avoiding 64-bit math */
-        if (upper_bound > 0x80000000)
-                min = 1 + ~upper_bound;                /* 2**32 - upper_bound */
-        else {
-                /* (2**32 - (x * 2)) % x == 2**32 % x when x <= 2**31 */
-                min = ((0xffffffff - (upper_bound * 2)) + 1) % upper_bound;
-        }
-#endif
-        /*
-         * This could theoretically loop forever but each retry has
-         * p > 0.5 (worst case, usually far better) of selecting a
-         * number inside the range we need, so it should rarely need
-         * to re-roll.
-         */
-        for (;;) {
-                r = arc4random();
-                if (r >= min)
-                        break;
-        }
-        return r % upper_bound;
-}
 /**
  * Generate the private key, which consists of a random list of M elements
  * (polynomials) in Fp^m
@@ -123,3 +82,41 @@ void multiply(fq_t* array_res, const fq_t* array_elt_1, const fq_t* array_elt_2,
     }
 }
 
+
+/**
+ * Generate the SHA256 from commits, public key and message
+ * @param uint8_t*     hash           :  Hash returned
+ * @param nmod_mat_t*  commits        :  List of matrices K commited
+ * @param uint8_t*     commits_bytes  :  List of matrices K commited in 8-byte list
+ * @param nmod_mat_t   mat_U          :  Public key U in matrix
+ * @param uint8_t*     mat_U_bytes    :  Public key U in 8-byte list
+ * @param uint8_t*     message_bytes  :  Message in 8-byte list
+ */
+void generate_hash(uint8_t* *hash, uint8_t* *commits_bytes, uint8_t* *mat_U_bytes, uint8_t* *message_bytes, const nmod_mat_t *commits, const nmod_mat_t mat_U){
+    *commits_bytes = malloc(sizeof(uint8_t) * COMMIT_SIZE);
+    *mat_U_bytes   = malloc(sizeof(uint8_t) * PUB_KEY_SIZE);
+    *message_bytes = malloc(sizeof(uint8_t) * MESSAGE_SIZE); 
+    *hash          = malloc(sizeof(uint8_t) * 32);
+    uint8_t* concat = malloc(sizeof(uint8_t) * HASH_SIZE);
+
+	for(int i = 0; i < 4; i++){
+		uint32_t number = arc4random();
+		for(int j = 0; j < 4; j++)
+			(*message_bytes)[i * 4 + j] = (number >> j * 8) & ((1 << 8) - 1);
+	}
+
+	list_mat_to_bytes(*commits_bytes, commits, T);
+    mat_to_bytes(*mat_U_bytes, mat_U, T);
+
+    for(int i = 0; i < COMMIT_SIZE; i++)
+		concat[i] = (*commits_bytes)[i];
+	for(int i = COMMIT_SIZE; i < PUB_KEY_SIZE; i++)
+		concat[i] = (*mat_U_bytes)[i];
+	for(int i = PUB_KEY_SIZE; i < MESSAGE_SIZE; i++)
+		concat[i] = (*message_bytes)[i];
+	
+    sha256ctx state;
+    sha256_inc_init(&state);
+    sha256(*hash, concat, HASH_SIZE);
+    free(concat);
+}

@@ -157,7 +157,45 @@ arc4_getword(void)
         return val;
 }
 
+uint32_t arc4random(void) {
+        uint32_t val;
+        _ARC4_LOCK();
+        arc4_count -= 4;
+        if (arc4_count <= 0 || !rs_initialized || arc4_stir_pid != getpid())
+                arc4_stir();
+        val = arc4_getword();
+        _ARC4_UNLOCK();
+        return val;
+}
 
+u_int32_t arc4random_uniform(uint32_t upper_bound) {
+        uint32_t r, min;
+        if (upper_bound < 2)
+                return 0;
+#if (ULONG_MAX > 0xffffffffUL)
+        min = 0x100000000UL % upper_bound;
+#else
+        /* Calculate (2**32 % upper_bound) avoiding 64-bit math */
+        if (upper_bound > 0x80000000)
+                min = 1 + ~upper_bound;                /* 2**32 - upper_bound */
+        else {
+                /* (2**32 - (x * 2)) % x == 2**32 % x when x <= 2**31 */
+                min = ((0xffffffff - (upper_bound * 2)) + 1) % upper_bound;
+        }
+#endif
+        /*
+         * This could theoretically loop forever but each retry has
+         * p > 0.5 (worst case, usually far better) of selecting a
+         * number inside the range we need, so it should rarely need
+         * to re-roll.
+         */
+        for (;;) {
+                r = arc4random();
+                if (r >= min)
+                        break;
+        }
+        return r % upper_bound;
+}
 /*
  * Calculate a uniformly distributed random number less than upper_bound
  * avoiding "modulo bias".
