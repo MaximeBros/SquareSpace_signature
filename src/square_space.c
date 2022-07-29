@@ -92,28 +92,27 @@ void multiply(fq_t* array_res, const fq_t* array_elt_1, const fq_t* array_elt_2,
  * @param uint8_t*     mat_U_bytes    :  Public key U in 8-byte list
  * @param uint8_t*     message_bytes  :  Message in 8-byte list
  */
-void generate_hash(uint8_t* *hash, uint8_t* *commits_bytes, uint8_t* *mat_U_bytes, uint8_t* *message_bytes, const nmod_mat_t *commits, const nmod_mat_t mat_U){
-    *commits_bytes = malloc(sizeof(uint8_t) * COMMIT_SIZE);
-    *mat_U_bytes   = malloc(sizeof(uint8_t) * PUB_KEY_SIZE);
-    *message_bytes = malloc(sizeof(uint8_t) * MESSAGE_SIZE); 
-    *hash          = malloc(sizeof(uint8_t) * 32);
-    uint8_t* concat = malloc(sizeof(uint8_t) * HASH_SIZE);
-
+void generate_hash(uint8_t* *hash, const nmod_mat_t *commits, const nmod_mat_t mat_U){
+    uint8_t *commits_bytes = malloc(sizeof(uint8_t) * COMMIT_SIZE);
+    uint8_t *mat_U_bytes   = malloc(sizeof(uint8_t) * PUB_KEY_SIZE);
+    uint8_t *message_bytes = malloc(sizeof(uint8_t) * MESSAGE_SIZE); 
+    uint8_t *concat        = malloc(sizeof(uint8_t) * HASH_SIZE);
+    *hash                  = malloc(sizeof(uint8_t) * 32);
 	for(int i = 0; i < 4; i++){
 		uint32_t number = arc4random();
 		for(int j = 0; j < 4; j++)
-			(*message_bytes)[i * 4 + j] = (number >> j * 8) & ((1 << 8) - 1);
+			message_bytes[i * 4 + j] = (number >> j * 8) & ((1 << 8) - 1);
 	}
 
-	list_mat_to_bytes(*commits_bytes, commits, T);
-    mat_to_bytes(*mat_U_bytes, mat_U, T);
+	list_mat_to_bytes(commits_bytes, commits, T);
+    mat_to_bytes(mat_U_bytes, mat_U, T);
 
     for(int i = 0; i < COMMIT_SIZE; i++)
-		concat[i] = (*commits_bytes)[i];
+		concat[i] = commits_bytes[i];
 	for(int i = COMMIT_SIZE; i < PUB_KEY_SIZE; i++)
-		concat[i] = (*mat_U_bytes)[i];
+		concat[i] = mat_U_bytes[i];
 	for(int i = PUB_KEY_SIZE; i < MESSAGE_SIZE; i++)
-		concat[i] = (*message_bytes)[i];
+		concat[i] = message_bytes[i];
 	
     sha256ctx state;
     sha256_inc_init(&state);

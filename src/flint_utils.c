@@ -1,6 +1,6 @@
 #include "flint_utils.h"
 
-uint8_t mask = ((1 << 8) - 1);
+#define get_mask(n) ((1 << n) - 1)
 
 /**
  * Initialize context over Fp and (Fp)^m, with its modulus
@@ -16,7 +16,9 @@ void init_modulus(fmpz_mod_poly_t* modulus, fmpz_mod_ctx_t* ctx_fp, fq_ctx_t* ct
     fmpz_mod_poly_set_coeff_si(*modulus, D1, C1, *ctx_fp);
     fmpz_mod_poly_set_coeff_si(*modulus, D2, C2, *ctx_fp);
     fmpz_mod_poly_set_coeff_si(*modulus, D3, C3, *ctx_fp);
-
+	#ifdef D4
+    fmpz_mod_poly_set_coeff_si(*modulus, D4, C4, *ctx_fp);
+    #endif
     fq_ctx_init_modulus(*ctx_fpm, *modulus, *ctx_fp, "x");
     fq_ctx_print(*ctx_fpm);
 }
@@ -47,30 +49,6 @@ void clear_array(fq_t* *array, slong size, fq_ctx_t ctx_fpm){
 	free(*array);
 }
 
-
-/**
- * Free memory for every tabs, context and modulus
- */
-void clear_vars(fq_t* *array_E, fq_t* *array_U, fq_t* *array_X, fq_t* *array_K, fq_t* *array_XE, fmpz_mod_poly_t* modulus, fmpz_mod_ctx_t* ctx_fp, fq_ctx_t* ctx_fpm, fmpz_t* p, uint8_t* *hash, uint8_t* *commits_bytes, uint8_t* *mat_U_bytes, uint8_t* *message_bytes){
-	clear_array(array_E, R, *ctx_fpm);
-	clear_array(array_U, T, *ctx_fpm);
-    for(int z = 0; z < 128; z++){
-    	clear_array(&array_X[z], R, *ctx_fpm);
-    }
-	clear_array(array_K, T, *ctx_fpm);
-	clear_array(array_XE, R * R, *ctx_fpm);
-	
-    fmpz_mod_poly_clear(*modulus, *ctx_fp);
-    fq_ctx_clear(*ctx_fpm);
-    fmpz_mod_ctx_clear(*ctx_fp);
-    fmpz_clear(*p);
-    
-    free(*hash);
-    free(*commits_bytes);
-    free(*mat_U_bytes);
-    free(*message_bytes);
-} 
-
 /**
  * Converting a list of elements over (Fp)^m to its matrix representation
  * @param nmod_mat_t  mat       :  Matrix returned
@@ -81,14 +59,36 @@ void clear_vars(fq_t* *array_E, fq_t* *array_U, fq_t* *array_X, fq_t* *array_K, 
  */
 long fqm_list_to_mat(nmod_mat_t mat, fmpz_t p, const fq_t* fqm_list, slong length, fq_ctx_t ctx_fpm){
 	nmod_mat_init(mat, length, M, P);
+    for(int i = 0; i < length; i++)
+		for(int j = 0; j < M; j++)
+		    nmod_mat_entry(mat,i,j) = fqm_list[i]->coeffs[j];
+ 
+	return nmod_mat_rref(mat);
+}
+
+/**
+ * Converting a list of elements over (Fp)^m to its matrix representation
+ * @param nmod_mat_t  mat       :  Matrix returned
+ * @param fmpz_t      p         :  Characteristic
+ * @param fq_t*       fqm_list  :  List of elements over (Fp)^m
+ * @param slong       length    :  List size
+ * @param fq_ctx_t    ctx_fpm   :  Context over (Fp)^m (modulus)
+ */
+long fqm_list_to_mat_T2(nmod_mat_t mat, fmpz_t p, const fq_t* fqm_list, slong length, fq_ctx_t ctx_fpm){
+	nmod_mat_t temp;
+	nmod_mat_init(temp, length, M, P);
 	
     for(int i = 0; i < length; i++){
 		for(int j = 0; j < M; j++){
-		    nmod_mat_entry(mat,i,j) = fqm_list[i]->coeffs[j];
+		    nmod_mat_entry(temp,i,j) = fqm_list[i]->coeffs[j];
 		}
     }
-	
-    return nmod_mat_rref(mat);
+    
+    long rank = nmod_mat_rref(temp);
+    nmod_mat_init(mat, T2, M, P);
+    nmod_mat_swap_entrywise(mat, temp);
+	nmod_mat_clear(temp);
+	return rank;
 }
 
 
@@ -102,20 +102,17 @@ long fqm_list_to_mat(nmod_mat_t mat, fmpz_t p, const fq_t* fqm_list, slong lengt
  */
 void mat_to_fqm_list(const nmod_mat_t mat, fq_t* fqm_list, slong length, fq_ctx_t ctx_fpm, fmpz_mod_ctx_t ctx_fp){
     fmpz_mod_poly_t poly; 
-	fq_t elt_fqm; 
-    fq_init(elt_fqm, ctx_fpm); 
     fmpz_mod_poly_init(poly, ctx_fp); 
-     
+    
 	for(int i = 0; i < length; i++){
+	    fq_init(fqm_list[i], ctx_fpm); 
 		fmpz_mod_poly_zero(poly, ctx_fp);
         for(int j = 0; j < M; j++){
-    		fmpz_mod_poly_set_coeff_ui(poly, j, nmod_mat_get_entry(mat, j, i), ctx_fp);
+    		fmpz_mod_poly_set_coeff_ui(poly, j, nmod_mat_get_entry(mat, i, j), ctx_fp);
     	}
-    	fq_set_fmpz_mod_poly(elt_fqm, poly, ctx_fpm);
-		fq_set(fqm_list[i], elt_fqm, ctx_fpm);
+    	fq_set_fmpz_mod_poly(fqm_list[i], poly, ctx_fpm);
     }
     fmpz_mod_poly_clear(poly, ctx_fp);
-    fq_clear(elt_fqm, ctx_fpm);
 }
 
 
@@ -135,20 +132,18 @@ void mat_to_bytes(uint8_t *tab_bytes, const nmod_mat_t mat, slong size){
 			bitBuffer |= nmod_mat_entry(mat,i,j);
 			count = count + 3;
 			if(count >= 8){
-				tab_bytes[k] = (bitBuffer >> count) & mask;
+				tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
 				bitBuffer >>= 8;
 				count = count - 8;
 				k++;
 			}
-			tab_bytes[k] = (bitBuffer >> count) & mask;
+			tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
 			bitBuffer >>= 8;
 			k++;
     	}
     if(count > 0){
-    	tab_bytes[k] = (bitBuffer >> count) & mask;
-		bitBuffer >>= 8;
+    	tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
     }
-    	
 }
 
 
@@ -169,18 +164,18 @@ void list_mat_to_bytes(uint8_t *tab_bytes, const nmod_mat_t* mat, slong size){
 				bitBuffer |= nmod_mat_entry(mat[h],i,j);
 				count = count + 3;
 				if(count >= 8){
-					tab_bytes[k] = (bitBuffer >> count) & mask;
-					bitBuffer >>= 8;
+					tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
+					bitBuffer = bitBuffer & get_mask(count);
 					count = count - 8;
 					k++;
 				}
-				tab_bytes[k] = (bitBuffer >> count) & mask;
-				bitBuffer >>= 8;
+				tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
+				bitBuffer = bitBuffer & get_mask(count);
+				bitBuffer <<= 11;
 				k++;
 			}
 	if(count > 0){
-    	tab_bytes[k] = (bitBuffer >> count) & mask;
-		bitBuffer >>= 8;
+    	tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
     }
 }
 
@@ -197,33 +192,61 @@ void responses_to_bytes(uint8_t *tab_bytes, const nmod_mat_t* mat, uint8_t* hash
 	 int k = 0;
 	 int size;
      for(int h = 0; h < 128; h++){
-     	if((hash[h / 8] >> h % 8) & 1)
-     	    size = R;
-     	else
-     	 	size = R2;
+     	size = ((hash[h / 8] >> h % 8) & 1) ? R : R2;
     	for(int i = 0; i < size; i++)
 			for(int j = 0; j < M; j++){
 				bitBuffer |= nmod_mat_entry(mat[h],i,j);
 				count = count + 3;
 				if(count >= 8){
-					tab_bytes[k] = (bitBuffer >> count) & mask;
-					bitBuffer >>= 8;
+					tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
+					bitBuffer = bitBuffer & get_mask(count);
 					count = count - 8;
 					k++;
 				}
-				tab_bytes[k] = (bitBuffer >> count) & mask;
-				bitBuffer >>= 8;
+				tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
+				bitBuffer = bitBuffer & get_mask(count);
+				bitBuffer <<= 11;
 				k++;
 			}
      }
-		 
 	if(count > 0){
-    	tab_bytes[k] = (bitBuffer >> count) & mask;
-		bitBuffer >>= 8;
-		k++;
+    	tab_bytes[k] = (bitBuffer >> count) & get_mask(8);
     }
 }
 
+
+void bytes_to_responses(fq_t* *array_responses, const uint8_t *tab_bytes, uint8_t* hash, fq_ctx_t ctx_fpm, 	slong size_responses){
+	 uint32_t bitBuffer = 0;  
+     uint8_t count = 0;
+	 int k = 0;
+	 int cnt = 0;
+	 int size;
+	 fmpz_poly_t poly; 
+	 for(int h = 0; h < 128; h++){
+	 	size = ((hash[h / 8] >> h % 8) & 1) ? R : R2;
+     	init_array(&array_responses[h], size, ctx_fpm);
+     	for(int i = 0; i < size; i++){
+     		fmpz_poly_init2(poly, M);
+     		for(int j = 0; j < M; ){
+     			bitBuffer |= tab_bytes[k];
+	 			count = count + 8;
+	 			if(count >= 11){
+	 				 fmpz_poly_set_coeff_ui(poly, j, ((bitBuffer >> (count - 11)) & get_mask(11)));
+	 				 bitBuffer = bitBuffer & get_mask((count - 11));
+					 count = count - 11;
+	 				 j++;
+	 			}
+     			
+	 			bitBuffer <<= 8;
+	 			k++;
+     		}
+     		fq_set_fmpz_poly(array_responses[h][i], poly, ctx_fpm);
+     	}
+     	printf("%d\n", (k - cnt));
+     	cnt = k;
+	 }
+	 printf("%ld et %d \n", size_responses, k);
+}
 
 /**
  * Write signature (commits and responses) into file
